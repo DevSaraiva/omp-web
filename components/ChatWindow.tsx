@@ -22,6 +22,7 @@ import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-fi
 import { MessageView } from "./MessageView";
 import { MarkdownBody } from "./MarkdownBody";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { HerdrLiveBar } from "./HerdrLiveBar";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { OmpWordmark } from "./OmpWordmark";
 import { useI18n } from "@/hooks/useI18n";
@@ -228,6 +229,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onAttentionNeed
     isNew,
     autoFollowPaused, resumeAutoFollow,
     goalStatus,
+    herdrLive, herdrSendKeys,
     sessionIdRef, messagesEndRef, scrollContainerRef,
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleRoleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
@@ -379,15 +381,18 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onAttentionNeed
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
+  const herdrWorking = herdrLive?.status === "working" || herdrLive?.status === "blocked";
   const chatInputElement = (
+    <>
+    {herdrLive && session && <HerdrLiveBar live={herdrLive} sessionId={session.id} onKeys={herdrSendKeys} />}
     <ChatInput
       ref={chatInputRef}
       onSend={handleSend}
       onAbort={handleAbort}
-      onSteer={agentRunning ? handleSteer : undefined}
-      onFollowUp={agentRunning ? handleFollowUp : undefined}
-      onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
-      isStreaming={sessionBusy}
+      onSteer={herdrLive ? (herdrWorking ? handleSend : undefined) : agentRunning ? handleSteer : undefined}
+      onFollowUp={!herdrLive && agentRunning ? handleFollowUp : undefined}
+      onPromptWithStreamingBehavior={!herdrLive && agentRunning ? handlePromptWithStreamingBehavior : undefined}
+      isStreaming={herdrLive ? herdrWorking : sessionBusy}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
       modelNames={modelNames}
@@ -398,16 +403,16 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onAttentionNeed
       modelRoles={modelRoles}
       onRoleModelChange={handleRoleModelChange}
       modelSwitching={modelSwitching}
-      onCompact={session || isNew ? handleCompact : undefined}
+      onCompact={!herdrLive && (session || isNew) ? handleCompact : undefined}
       onAbortCompaction={handleAbortCompaction}
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
       toolPreset={toolPreset}
-      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
+      onToolPresetChange={!herdrLive && (session || isNew) ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}
       effectiveThinkingLevel={effectiveThinkingLevel}
-      onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
+      onThinkingLevelChange={!herdrLive && (session || isNew) ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}
       retryInfo={retryInfo}
@@ -425,6 +430,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onAttentionNeed
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
       cwd={session?.cwd ?? newSessionCwd}
     />
+    </>
   );
 
   const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");

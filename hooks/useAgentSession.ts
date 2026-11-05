@@ -20,6 +20,7 @@ import { rememberSessionContinuation, clearSessionContinuation } from "@/lib/wor
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { ContextUsage, GoalStatusInfo, SessionStatsInfo, SlashCommandInfo } from "@/lib/omp-types";
 import type { ModelRoleAssignment } from "@/lib/api-types";
+import type { HerdrLiveInfo } from "@/lib/herdr-tree";
 
 export interface SessionData {
   runtimeId?: string;
@@ -1631,9 +1632,78 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, followSessionIdentity, followRuntimeState, refreshContextUsage, scheduleEventStreamClose, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
+  // Herdr mode: an omp agent in a Herdr pane is writing this transcript. omp-web then
+  // only displays it (reloading when the file changes) and sends input through Herdr,
+  // so the terminal and the browser drive one agent instead of two racing on one file.
+  const [herdrLive, setHerdrLive] = useState<HerdrLiveInfo | null>(null);
+  const herdrLiveRef = useRef<HerdrLiveInfo | null>(null);
+  const herdrSessionId = session?.id;
+  useEffect(() => {
+    herdrLiveRef.current = null;
+    setHerdrLive(null);
+    if (!herdrSessionId) return;
+    const sid = herdrSessionId;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastVersion: string | null = null;
+    const poll = async () => {
+      if (document.visibilityState === "visible") {
+        try {
+          const res = await fetch(`/api/herdr/session/${encodeURIComponent(sid)}`);
+          const body: unknown = res.ok ? await res.json() : null;
+          const next = body && typeof body === "object" && "live" in body && body.live === true && "pane" in body
+            ? body.pane as HerdrLiveInfo // shape owned by app/api/herdr/session/[id]/route.ts
+            : null;
+          if (stopped) return;
+          herdrLiveRef.current = next;
+          setHerdrLive(next);
+          if (next && lastVersion !== null && next.version !== lastVersion && sessionIdRef.current === sid) {
+            void loadSession(sid);
+          }
+          lastVersion = next?.version ?? null;
+        } catch {
+          // Herdr or the server is briefly unreachable; keep the last known state.
+        }
+      }
+      if (!stopped) timer = setTimeout(poll, herdrLiveRef.current ? 1500 : 8000);
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [herdrSessionId, loadSession]);
+
+  const herdrCommand = useCallback(async (command: { type: "prompt"; message: string } | { type: "keys"; keys: string[] }) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return false;
+    try {
+      const res = await fetch(`/api/herdr/session/${encodeURIComponent(sid)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(command),
+      });
+      if (res.ok) return true;
+      const body: unknown = await res.json().catch(() => null);
+      const message = body && typeof body === "object" && "error" in body ? String(body.error) : `HTTP ${res.status}`;
+      addNotice({ type: "error", message: `Herdr: ${message}` });
+    } catch (e) {
+      addNotice({ type: "error", message: `Herdr: ${e instanceof Error ? e.message : String(e)}` });
+    }
+    return false;
+  }, [addNotice]);
+
+  const herdrSendKeys = useCallback((keys: string[]) => herdrCommand({ type: "keys", keys }), [herdrCommand]);
+
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
+    if (herdrLiveRef.current) {
+      if (images?.length) {
+        addNotice({ type: "error", message: "Images cannot be sent to an agent running in Herdr; attach them in the terminal." });
+        return;
+      }
+      const userMsg: AgentMessage = { role: "user", content: message, timestamp: Date.now() };
+      if (await herdrCommand({ type: "prompt", message: trimmedMessage })) setMessages((prev) => [...prev, userMsg]);
+      return;
+    }
     if (agentRunningRef.current || bashRunningRef.current) return;
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
 
@@ -1746,7 +1816,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, opts.chatInputRef]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, opts.chatInputRef, herdrCommand]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -1780,6 +1850,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    if (herdrLiveRef.current) {
+      await herdrCommand({ type: "keys", keys: ["esc"] });
+      return;
+    }
     if (bashRunningRef.current) {
       try {
         await sendAgentCommand(sid, { type: "abort_bash" }, runtimeIdRef);
@@ -1793,7 +1867,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to abort:", e);
     }
-  }, []);
+  }, [herdrCommand]);
 
   /**
    * Fork a new session from an explicit transcript entry, or from the latest
@@ -2467,6 +2541,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isNew,
     autoFollowPaused, resumeAutoFollow,
     goalStatus,
+    herdrLive, herdrSendKeys,
     // Refs
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
     // Actions

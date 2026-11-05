@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
+import { HerdrPanel } from "./HerdrPanel";
 import { SubagentPanel } from "./SubagentPanel";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
@@ -44,6 +45,8 @@ import type { BlockingExtensionUiRequest, SessionInfo, SessionTreeNode, Subagent
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/omp-types";
+import type { HerdrMachine } from "@/lib/herdr-tree";
+import { KanbanView } from "./KanbanView";
 
 type SessionCopyField = "file" | "id";
 type AutoNameStatus =
@@ -85,6 +88,8 @@ export function AppShell() {
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [settingsConfigOpen, setSettingsConfigOpen] = useState(false);
+  // "board" shows the Kan board in the main column instead of the chat.
+  const [mainView, setMainView] = useState<"chat" | "board">("chat");
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
@@ -474,6 +479,34 @@ export function AppShell() {
     }
   }, [invalidateWorkspaceRestore, router, isMobile, selectedSession]);
 
+  // Opens the omp session of a Herdr pane (an agent started from the board). A new agent
+  // writes its transcript a few seconds after it starts, so poll briefly for it.
+  const handleOpenAgent = useCallback(async (paneId: string) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const res = await fetch("/api/herdr?force=1");
+        const data: unknown = res.ok ? await res.json() : null;
+        const machines: HerdrMachine[] = data && typeof data === "object" && "machines" in data && Array.isArray(data.machines) ? data.machines : [];
+        const pane = machines.find((m) => m.local)?.workspaces
+          .flatMap((w) => w.tabs).flatMap((t) => t.panes).find((p) => p.paneId === paneId);
+        if (pane?.session) {
+          setMainView("chat");
+          handleSelectSession(pane.session);
+          return;
+        }
+      } catch {
+        // retry
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 1500);
+      await promise;
+    }
+  }, [handleSelectSession]);
+
+  // Picking any session (sidebar, Herdr panel, board) shows it.
+  const selectedSessionId = selectedSession?.id;
+  useEffect(() => { if (selectedSessionId) setMainView("chat"); }, [selectedSessionId]);
+
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
     clearSessionContinuation();
     invalidateWorkspaceRestore();
@@ -812,6 +845,7 @@ export function AppShell() {
 
   const sidebarContent = (
     <>
+      <HerdrPanel selectedSessionId={selectedSession?.id ?? null} onSelectSession={(s) => { setMainView("chat"); handleSelectSession(s); }} />
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
         selectedRuntimeId={selectedSession?.runtimeId}
@@ -1010,6 +1044,22 @@ export function AppShell() {
                 <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             )}
+          </button>
+          <button
+            onClick={() => setMainView((v) => (v === "board" ? "chat" : "board"))}
+            title={mainView === "board" ? "Back to chat" : "Board"}
+            aria-label={mainView === "board" ? "Back to chat" : "Board"}
+            aria-pressed={mainView === "board"}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+              background: mainView === "board" ? "var(--bg-hover)" : "none", border: "none", borderRight: "1px solid var(--border)",
+              color: mainView === "board" ? "var(--text)" : "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="4" height="8" rx="1" />
+            </svg>
           </button>
           <button
             onClick={(e) => {
@@ -1663,7 +1713,9 @@ export function AppShell() {
         {/* Chat content */}
         <div className="chat-content-layout">
           <div className="chat-session-column">
-          {showChat ? (
+          {mainView === "board" ? (
+            <KanbanView onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
+          ) : showChat ? (
             <ChatWindow
               key={sessionKey}
               session={selectedSession}

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession, getFinalRpcSessionId } from "@/lib/rpc-manager";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { HerdrLiveSessionError } from "@/lib/herdr";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -56,6 +57,12 @@ export async function POST(
     session.syncSessionIdentity();
     return NextResponse.json({ success: true, data: result, sessionId: session.sessionId, runtimeId: session.runtimeId });
   } catch (error) {
+    if (error instanceof HerdrLiveSessionError) {
+      return NextResponse.json({
+        error: error.message, code: error.code, paneId: error.paneId,
+        ...(commandType === "prompt" ? { accepted: false } : {}),
+      }, { status: 409 });
+    }
     return NextResponse.json({
       error: error instanceof Error ? error.message : String(error),
       ...(commandType === "prompt" && !promptAccepted

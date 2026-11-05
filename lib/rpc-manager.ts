@@ -37,6 +37,7 @@ import { persistExplicitStartupPreferences } from "./startup-preferences";
 import type { SlashCommandInfo } from "./omp-types";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./omp-types";
 import { GoalModeController } from "./goal-mode";
+import { assertNotLiveInHerdr } from "./herdr";
 import type {
   ExtensionAskDialogResult,
   ExtensionUiRequest,
@@ -1821,6 +1822,10 @@ export async function startRpcSession(
 
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
+
+  // A transcript that an omp agent in a Herdr pane is writing must not get a second
+  // in-process agent: two writers would interleave entries in one .jsonl file.
+  if (sessionFile) await assertNotLiveInHerdr(sessionFile);
 
   const starting = (async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
