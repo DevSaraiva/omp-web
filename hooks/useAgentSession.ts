@@ -190,6 +190,8 @@ export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" 
 const PROGRAMMATIC_SCROLL_IGNORE_MS = 700;
 const USER_SCROLL_INTENT_MS = 1200;
 const AUTO_FOLLOW_BOTTOM_THRESHOLD_PX = 72;
+/** Minimum gap between transcript reloads while a Herdr-live agent is working. */
+const HERDR_RELOAD_MIN_MS = 6000;
 const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
@@ -1646,6 +1648,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lastVersion: string | null = null;
+    let lastStatus: HerdrLiveInfo["status"] | null = null;
+    let lastReloadAt = 0;
     const poll = async () => {
       if (document.visibilityState === "visible") {
         try {
@@ -1657,10 +1661,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (stopped) return;
           herdrLiveRef.current = next;
           setHerdrLive(next);
-          if (next && lastVersion !== null && next.version !== lastVersion && sessionIdRef.current === sid) {
-            void loadSession(sid);
+          // A long transcript is megabytes per reload, so while the agent works reload at
+          // most every few seconds, and at once when it stops (the final answer is in).
+          const stoppedWorking = lastStatus === "working" && next?.status !== "working";
+          const changed = next !== null && lastVersion !== null && next.version !== lastVersion;
+          if (changed && sessionIdRef.current === sid && (stoppedWorking || Date.now() - lastReloadAt > HERDR_RELOAD_MIN_MS)) {
+            await loadSession(sid);
+            lastReloadAt = Date.now();
+            lastVersion = next.version;
+          } else if (lastVersion === null || next === null) {
+            lastVersion = next?.version ?? null;
           }
-          lastVersion = next?.version ?? null;
+          lastStatus = next?.status ?? null;
         } catch {
           // Herdr or the server is briefly unreachable; keep the last known state.
         }
