@@ -47,6 +47,7 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/omp-types";
 import type { HerdrMachine } from "@/lib/herdr-tree";
 import { KanbanView } from "./KanbanView";
+import { AutomationsView } from "./AutomationsView";
 
 type SessionCopyField = "file" | "id";
 type AutoNameStatus =
@@ -88,8 +89,8 @@ export function AppShell() {
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [settingsConfigOpen, setSettingsConfigOpen] = useState(false);
-  // "board" shows the Kan board in the main column instead of the chat.
-  const [mainView, setMainView] = useState<"chat" | "board">("chat");
+  // "board" (Kan) and "automations" (scheduled agent runs) replace the chat in the main column.
+  const [mainView, setMainView] = useState<"chat" | "board" | "automations">("chat");
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
@@ -1064,6 +1065,22 @@ export function AppShell() {
             </svg>
           </button>
           <button
+            onClick={() => setMainView((v) => (v === "automations" ? "chat" : "automations"))}
+            title={mainView === "automations" ? "Back to chat" : "Automations"}
+            aria-label={mainView === "automations" ? "Back to chat" : "Automations"}
+            aria-pressed={mainView === "automations"}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+              background: mainView === "automations" ? "var(--bg-hover)" : "none", border: "none", borderRight: "1px solid var(--border)",
+              color: mainView === "automations" ? "var(--text)" : "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="13" r="8" /><polyline points="12 9 12 13 15 15" /><line x1="9" y1="2" x2="15" y2="2" />
+            </svg>
+          </button>
+          <button
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
@@ -1717,6 +1734,8 @@ export function AppShell() {
           <div className="chat-session-column">
           {mainView === "board" ? (
             <KanbanView onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
+          ) : mainView === "automations" ? (
+            <AutomationsView onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
           ) : showChat ? (
             <ChatWindow
               key={sessionKey}

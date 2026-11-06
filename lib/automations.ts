@@ -23,13 +23,6 @@ export class AutomationNotFoundError extends Error {
   }
 }
 
-/** `agent auto run` prints a progress line before its JSON: parse from the first line that opens an object. */
-function parseCliJson(stdout: string): unknown {
-  const lines = stdout.split("\n");
-  const start = lines.findIndex((line) => line.startsWith("{"));
-  return JSON.parse(start <= 0 ? stdout : lines.slice(start).join("\n"));
-}
-
 function runCli(args: string[], options: { stdin?: string; timeout?: number } = {}): Promise<unknown> {
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
   const child = execFile(
@@ -42,7 +35,7 @@ function runCli(args: string[], options: { stdin?: string; timeout?: number } = 
         return;
       }
       try {
-        resolve(parseCliJson(stdout));
+        resolve(JSON.parse(stdout));
       } catch {
         reject(new Error(`agent auto ${args[0]} returned invalid JSON: ${stdout.trim().slice(0, 200)}`));
       }
@@ -88,15 +81,13 @@ export async function runAutomationAction(id: string, action: RunAction): Promis
 }
 
 /**
- * Creates or updates; the CLI treats an existing id as an update. `paused` is run state, not
- * part of the definition file, so `save` ignores it and it is applied with pause/resume.
- * The save also commits and pushes the definition, hence the longer timeout.
+ * Creates or updates; the CLI treats an existing id as an update and applies `paused` (run
+ * state) before publishing, so a new automation saved paused is never briefly due. The save
+ * also commits and pushes the definition, hence the longer timeout.
  */
 export async function saveAutomation(definition: AutomationDefinition): Promise<Automation> {
   assertId(definition.id);
-  const saved = expectAutomation(await runCli(["save"], { stdin: JSON.stringify(definition), timeout: RUN_TIMEOUT_MS }));
-  if (saved.paused === definition.paused) return saved;
-  return runAutomationAction(definition.id, definition.paused ? "pause" : "resume");
+  return expectAutomation(await runCli(["save"], { stdin: JSON.stringify(definition), timeout: RUN_TIMEOUT_MS }));
 }
 
 export async function deleteAutomation(id: string): Promise<void> {
