@@ -1020,8 +1020,10 @@ export function AppShell() {
 
       {/* Center: chat */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-        {/* Top bar with sidebar toggle */}
-        <div ref={topBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)", background: "var(--bg-panel)" }}>
+        {/* Top bar with sidebar toggle. On a phone its icons are wider than the screen: the bar
+            scrolls sideways itself (popovers are position: fixed, so nothing is clipped) instead
+            of shifting the whole chat column. */}
+        <div ref={topBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, minWidth: 0, overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)", background: "var(--bg-panel)" }}>
           <button
             onClick={handleSidebarToggle}
              title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
