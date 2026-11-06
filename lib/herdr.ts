@@ -1,9 +1,10 @@
 import { execFile } from "child_process";
+import { readdir, readFile } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { sessionPathKey } from "./session-path";
-import { buildHerdrMachine, parseHerdrMachineList, type HerdrMachine, type LivePane, type SavedHerdrMachine } from "./herdr-tree";
+import { buildHerdrMachine, linkHerdrParents, parseHerdrMachineList, type HerdrMachine, type LivePane, type SavedHerdrMachine } from "./herdr-tree";
 
 export type { HerdrLiveInfo, HerdrMachine, HerdrPane, HerdrTab, HerdrWorkspace, HerdrStatus, LivePane } from "./herdr-tree";
 
@@ -17,7 +18,34 @@ export type { HerdrLiveInfo, HerdrMachine, HerdrPane, HerdrTab, HerdrWorkspace, 
 const execFileAsync = promisify(execFile);
 const HERDR_BIN = process.env.OMP_WEB_HERDR_BIN || "herdr";
 const AGENT_BIN = process.env.OMP_WEB_AGENT_BIN || join(homedir(), ".local", "bin", "agent");
+const AGENT_REGISTRY = process.env.OMP_WEB_AGENT_REGISTRY || join(homedir(), ".agentic", "agents");
 const TREE_TTL_MS = 1500;
+
+/**
+ * child terminal id -> parent terminal id, from the Agentic Framework's registry
+ * (`agent new` / `agent sub` record who started whom). Missing registry: no links.
+ */
+async function readParentLinks(): Promise<Map<string, string>> {
+  const links = new Map<string, string>();
+  let files: string[];
+  try {
+    files = (await readdir(AGENT_REGISTRY)).filter((f) => f.endsWith(".json"));
+  } catch {
+    return links;
+  }
+  await Promise.all(files.map(async (file) => {
+    try {
+      const rec: unknown = JSON.parse(await readFile(join(AGENT_REGISTRY, file), "utf8"));
+      if (rec && typeof rec === "object" && "terminal" in rec && "parent_terminal" in rec
+        && typeof rec.terminal === "string" && typeof rec.parent_terminal === "string") {
+        links.set(rec.terminal, rec.parent_terminal);
+      }
+    } catch {
+      // A record being written or a stray file: skip it.
+    }
+  }));
+  return links;
+}
 
 export class HerdrLiveSessionError extends Error {
   readonly code = "herdr_live";
@@ -88,7 +116,11 @@ export function getHerdrTree(options: { force?: boolean } = {}): Promise<HerdrMa
     } catch {
       // Herdr not running or no saved machines: the local machine is still listed.
     }
-    const local = loadMachine("local", process.env.OMP_WEB_MACHINE_LABEL || "This Mac", true);
+    const [local, links] = await Promise.all([
+      loadMachine("local", process.env.OMP_WEB_MACHINE_LABEL || "This Mac", true),
+      readParentLinks(),
+    ]);
+    linkHerdrParents(local, links);
     const remote = saved.filter((m) => m.enabled).map((m) => remoteMachine(m.id, m.label));
     return Promise.all([local, ...remote]);
   })();

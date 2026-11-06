@@ -13,6 +13,12 @@ export interface HerdrPane {
   /** Agent kind Herdr detected in the pane (omp, claude, codex, ...), or null for a shell. */
   agent: string | null;
   title: string;
+  /** Label given with `herdr pane rename`, e.g. "sub: <task>", or null. */
+  label: string | null;
+  /** Herdr's terminal id: unlike paneId it survives moving the pane to another tab. */
+  terminalId: string;
+  /** Pane of the agent that started this one (a subagent), when the Agentic Framework recorded it. */
+  parentPaneId?: string;
   cwd: string;
   /** Transcript file the pane's agent writes, when Herdr's integration reports it. */
   sessionPath: string | null;
@@ -120,6 +126,8 @@ export function buildHerdrMachine(
       status: status(raw.agent_status),
       agent: typeof raw.agent === "string" ? raw.agent : null,
       title: str(raw.terminal_title_stripped, str(raw.terminal_title)),
+      label: typeof raw.label === "string" && raw.label ? raw.label : null,
+      terminalId: str(raw.terminal_id),
       cwd: str(raw.foreground_cwd, str(raw.cwd)),
       sessionPath: sessionPathOf(raw),
       focused: raw.focused === true,
@@ -147,4 +155,47 @@ export function buildHerdrMachine(
     };
   }).sort((a, b) => a.number - b.number);
   return { ...machine, reachable: true, workspaces };
+}
+
+/**
+ * Marks subagent panes with the pane of the agent that started them. `parentByTerminal` maps a
+ * child's terminal id to its parent's (from the Agentic Framework's agent registry). Links to a
+ * parent that is no longer open are dropped, so an orphan shows as a top-level agent.
+ */
+export function linkHerdrParents(machine: HerdrMachine, parentByTerminal: ReadonlyMap<string, string>): void {
+  const panes = machine.workspaces.flatMap((w) => w.tabs).flatMap((t) => t.panes);
+  const paneByTerminal = new Map(panes.map((p) => [p.terminalId, p.paneId]));
+  for (const pane of panes) {
+    const parentTerminal = parentByTerminal.get(pane.terminalId);
+    const parentPaneId = parentTerminal ? paneByTerminal.get(parentTerminal) : undefined;
+    if (parentPaneId && parentPaneId !== pane.paneId) pane.parentPaneId = parentPaneId;
+  }
+}
+
+/** A tab's agents as a forest: roots (agents nobody in this tab started) with their subagents. */
+export interface HerdrAgentNode {
+  pane: HerdrPane;
+  children: HerdrAgentNode[];
+}
+
+export function herdrAgentForest(tab: HerdrTab): HerdrAgentNode[] {
+  const agents = tab.panes.filter((p) => p.agent);
+  const inTab = new Set(agents.map((p) => p.paneId));
+  const childrenOf = new Map<string, HerdrPane[]>();
+  for (const pane of agents) {
+    if (pane.parentPaneId && inTab.has(pane.parentPaneId)) {
+      const list = childrenOf.get(pane.parentPaneId) ?? [];
+      list.push(pane);
+      childrenOf.set(pane.parentPaneId, list);
+    }
+  }
+  const build = (pane: HerdrPane, seen: Set<string>): HerdrAgentNode => ({
+    pane,
+    children: (childrenOf.get(pane.paneId) ?? [])
+      .filter((c) => !seen.has(c.paneId))
+      .map((c) => build(c, new Set([...seen, c.paneId]))),
+  });
+  return agents
+    .filter((p) => !p.parentPaneId || !inTab.has(p.parentPaneId))
+    .map((p) => build(p, new Set([p.paneId])));
 }

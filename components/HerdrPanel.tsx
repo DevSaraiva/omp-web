@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { HerdrMachine, HerdrPane, HerdrStatus, HerdrTab } from "@/lib/herdr-tree";
+import { herdrAgentForest, type HerdrAgentNode, type HerdrMachine, type HerdrPane, type HerdrStatus } from "@/lib/herdr-tree";
 import type { SessionInfo } from "@/lib/types";
 
 const POLL_MS = 3000;
@@ -52,9 +52,9 @@ const rowStyle = (depth: number, selected: boolean): React.CSSProperties => ({
   fontSize: 13, textAlign: "left", overflow: "hidden",
 });
 
-/** Agents in a tab: panes Herdr detected an agent in. Shell panes are not shown. */
-function agentPanes(tab: HerdrTab): HerdrPane[] {
-  return tab.panes.filter((p) => p.agent);
+/** Name for an agent row: its Herdr pane label (minus a "sub:" prefix), else its terminal title. */
+function agentLabel(pane: HerdrPane): string {
+  return pane.label?.replace(/^sub:\s*/, "") || pane.title.replace(/^π\s*\S\s*/, "");
 }
 
 /**
@@ -111,7 +111,7 @@ export function HerdrPanel(props: {
 
   const open = (pane: HerdrPane) => { if (pane.session) onSelectSession(pane.session); };
 
-  const paneRow = (pane: HerdrPane, label: string, depth: number, machineLocal: boolean) => {
+  const paneRow = (pane: HerdrPane, label: string, depth: number, machineLocal: boolean, isSubagent = false) => {
     const selectable = machineLocal && !!pane.session;
     return (
       <button
@@ -124,6 +124,7 @@ export function HerdrPanel(props: {
           : machineLocal ? "No omp session for this pane yet" : "Sessions on other machines open in their own omp-web"}
         style={{ ...rowStyle(depth, selectable && pane.sessionId === selectedSessionId), opacity: selectable ? 1 : 0.55, cursor: selectable ? "pointer" : "default" }}
       >
+        {isSubagent && <span aria-label="subagent" style={{ color: "var(--text-dim)", fontSize: 12, flexShrink: 0 }}>↳</span>}
         <Dot status={pane.status} />
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         {pane.status === "blocked" && <span style={{ fontSize: 11, color: STATUS_COLOR.blocked }}>approve</span>}
@@ -160,16 +161,21 @@ export function HerdrPanel(props: {
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ws.label}</span>
                 </button>
                 {!collapsed[wsKey] && ws.tabs.map((tab) => {
-                  const agents = agentPanes(tab);
-                  // A tab with one agent is that agent; a tab with several lists each one under it.
-                  if (agents.length === 1) return paneRow(agents[0], tab.label, depth + 1, machine.local);
+                  // Subagents sit under the agent that started them, one level deeper per generation.
+                  const rows = (node: HerdrAgentNode, label: string, rowDepth: number, isSubagent: boolean): React.ReactNode[] => [
+                    paneRow(node.pane, label, rowDepth, machine.local, isSubagent),
+                    ...node.children.flatMap((child) => rows(child, agentLabel(child.pane) || "subagent", rowDepth + 1, true)),
+                  ];
+                  const forest = herdrAgentForest(tab);
+                  // A tab with one top-level agent is that agent; with several, each is listed under the tab.
+                  if (forest.length === 1) return <div key={tab.id}>{rows(forest[0], tab.label, depth + 1, false)}</div>;
                   return (
                     <div key={tab.id}>
-                      <div style={{ ...rowStyle(depth + 1, false), cursor: "default", color: agents.length ? "var(--text)" : "var(--text-muted)" }}>
+                      <div style={{ ...rowStyle(depth + 1, false), cursor: "default", color: forest.length ? "var(--text)" : "var(--text-muted)" }}>
                         <Dot status={tab.status} />
                         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tab.label}</span>
                       </div>
-                      {agents.map((pane, i) => paneRow(pane, pane.title.replace(/^π\s*\S\s*/, "") || `agent ${i + 1}`, depth + 2, machine.local))}
+                      {forest.flatMap((node, i) => rows(node, agentLabel(node.pane) || `agent ${i + 1}`, depth + 2, false))}
                     </div>
                   );
                 })}
