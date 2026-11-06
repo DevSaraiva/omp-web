@@ -120,20 +120,31 @@ function lastPathSegment(repoPath: string): string {
   return segments[segments.length - 1] ?? "";
 }
 
+/** Words in a Herdr workspace label that mark it as the home of a playbook's work. */
+const PLAYBOOK_WORKSPACE_WORDS: Record<KanAgentPlaybook, readonly string[]> = {
+  software: ["software", "dev", "code"],
+  planning: ["plan"],
+  sports: ["sport", "training"],
+  ads: ["marketing", "ads"],
+};
+
 /**
- * Default Herdr workspace for a project: the first one whose label contains the
- * repo folder name, case-insensitively. Returns undefined when nothing matches,
- * which means the agent gets a new workspace.
+ * Default Herdr workspace for a project on this machine: among local workspaces whose
+ * label contains the repo folder name (case-insensitive), the one whose label also names
+ * the playbook's kind of work, else the first. Undefined means the agent gets a new
+ * workspace. Remote machines are skipped: agents start on the machine serving omp-web.
  */
 export function pickDefaultHerdrWorkspace(
   machines: readonly HerdrMachineView[],
   repoPath: string,
+  playbook: KanAgentPlaybook = "software",
 ): string | undefined {
   const folder = lastPathSegment(repoPath).toLowerCase();
   if (!folder) return undefined;
-  for (const machine of machines) {
-    const match = machine.workspaces.find((workspace) => workspace.label.toLowerCase().includes(folder));
-    if (match) return match.id;
-  }
-  return undefined;
+  const candidates = machines.filter((m) => m.local !== false)
+    .flatMap((m) => m.workspaces)
+    .filter((w) => w.label.toLowerCase().includes(folder));
+  const words = PLAYBOOK_WORKSPACE_WORDS[playbook];
+  const preferred = candidates.find((w) => words.some((word) => w.label.toLowerCase().includes(word)));
+  return (preferred ?? candidates[0])?.id;
 }

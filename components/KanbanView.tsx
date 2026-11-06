@@ -131,8 +131,8 @@ function StartAgentDialog({
   }, []);
 
   useEffect(() => {
-    if (!workspaceTouched.current) setWorkspaceId(pickDefaultHerdrWorkspace(machines, repo) ?? "");
-  }, [machines, repo]);
+    if (!workspaceTouched.current) setWorkspaceId(pickDefaultHerdrWorkspace(machines, repo, playbook) ?? "");
+  }, [machines, repo, playbook]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -142,11 +142,9 @@ function StartAgentDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, submitting]);
 
-  const workspaceOptions = machines.flatMap((machine) =>
-    machine.workspaces.map((workspace) => ({
-      id: workspace.id,
-      label: machines.length > 1 ? `${machine.label} / ${workspace.label}` : workspace.label,
-    })),
+  // Agents start on the machine serving omp-web, so only its own workspaces are offered.
+  const workspaceOptions = machines.filter((machine) => machine.local !== false).flatMap((machine) =>
+    machine.workspaces.map((workspace) => ({ id: workspace.id, label: workspace.label })),
   );
 
   async function start() {

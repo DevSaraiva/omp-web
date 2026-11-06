@@ -53,7 +53,8 @@ export function HerdrLiveBar(props: {
   const key = (keys: string[]) => () => { void onKeys(keys); };
 
   return (
-    <div style={{ margin: "0 12px 6px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-panel)", overflow: "hidden" }}>
+    // contain: inline-size keeps the wide terminal text from widening the chat column.
+    <div style={{ margin: "0 12px 6px", contain: "inline-size", minWidth: 0, border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-panel)", overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", flexWrap: "wrap" }}>
         <span style={{
           width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
@@ -69,7 +70,7 @@ export function HerdrLiveBar(props: {
       {terminalOpen && (
         <div style={{ borderTop: "1px solid var(--border)" }}>
           <pre style={{
-            margin: 0, padding: "8px 10px", maxHeight: 260, overflow: "auto", fontSize: 11, lineHeight: 1.35,
+            margin: 0, padding: "8px 10px", maxHeight: 260, overflow: "auto", fontSize: 10.5, lineHeight: 1.35,
             fontFamily: "var(--font-mono)", color: "var(--text)", background: "var(--bg)", whiteSpace: "pre",
           }}>
             {screen ?? "Loading…"}
