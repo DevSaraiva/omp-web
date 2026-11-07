@@ -33,9 +33,3 @@ test("sizes the composer popups from the space around the composer", () => {
   assert.doesNotMatch(chatInputSource, /maxHeight: "min\(\d+vh/);
   assert.doesNotMatch(chatInputSource, /bottom: "calc\(100% \+ 8px\)"/);
 });
-
-test("flips the composer model picker below the trigger when needed", () => {
-  assert.match(chatInputSource, /const \{ side, maxHeight: maxH \} = computePopupPlacement\(/);
-  assert.match(chatInputSource, /side === "above"\s*\?\s*\{ bottom: viewportHeight - modelDropdownRect\.top \+ 6 \}\s*:\s*\{ top: modelDropdownRect\.bottom \+ 6 \}/);
-  assert.match(chatInputSource, /setModelDropdownRect\(\{ top: rect\.top, bottom: rect\.bottom,/);
-});
