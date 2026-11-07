@@ -157,20 +157,16 @@ Requests to loopback addresses are never proxied, so a local provider (Ollama, L
 
 ## Features
 
-- **Pick work back up**: browse previous omp conversations by project without digging through terminal history or session paths.
+- **Pick work back up**: open any agent's omp session from the Herdr panel, with its full history.
 - **Route by role**: assign and switch models per scope of work — the roles omp already uses for subagents, plan mode, and commits.
 - **Try different directions safely**: continue from an earlier message or fork a session into a separate route.
-- **Work across branches**: switch Git worktrees from the sidebar so new sessions and the Explorer follow the checkout you choose.
-- **Chat beside the project**: browse files on the left and preview source, docs, images, audio, and PDFs on the right while the agent works.
+- **Board beside the chat**: the project's Kan board opens next to the conversation.
+- **Preview what the agent touched**: open files linked in the chat to preview source, docs, images, audio, and PDFs on the right while the agent works.
 - **See session state clearly**: context usage, cost, compaction state, and system prompt details are visible from the top bar.
 - **Configure less from the terminal**: manage providers, logins/API keys, model tests, plugins, and skill switches from the web UI.
 - **Use the interface in your language**: switch between the supported UI languages from the top bar.
 
 ## Screenshots
-
-**Session browsing + file explorer** — projects and past sessions on the left, the project's real file tree underneath, ready to preview or attach to a message.
-
-![Sidebar with session browsing and the file explorer](./docs/screenshots/01-sidebar-and-explorer.png)
 
 **Real-time chat with model roles** — the agent's tool calls, cost, context usage, and the active model role are all visible while it works.
 
@@ -196,34 +192,9 @@ Requests to loopback addresses are never proxied, so a local provider (Ollama, L
 - **Custom system prompts**: `SYSTEM.md` and `APPEND_SYSTEM.md` are picked up for browser sessions exactly as `omp` picks them up in a terminal — the project's `.omp/` (or `.claude/`, `.codex/`, `.gemini/`) first, then `~/.omp/agent/` — resolved against the session's own working directory.
 - **Project trust**: opening a repository in a browser tab must not run its code, so omp-web gates a project's `.omp/extensions`, `.omp/hooks`, `.omp/tools` and `.mcp.json` behind an explicit trust decision. Skills and rules are data and load either way. See [Project trust](./docs/project-trust.md).
 - **File access**: file browsing and preview are scoped to the selected project directory and working directories that appear in sessions.
-- **Git worktrees**: see [Worktrees in omp-web](./docs/worktrees.md) for when the switcher appears, how new worktrees are created, and what removal does.
 - **Forks vs in-session branches**: Fork creates a new `.jsonl` file. "Edit from here" creates another branch inside the same session file.
 - **Skills**: the skill installer shells out to `npx skills add --agent claude-code`, which writes the `.claude/skills` layout omp discovers by default.
 - **Internationalization**: see [Internationalization](./docs/i18n.md) for using translations and adding languages or UI text.
-
-### Downstream Session Context Menu
-
-Electron wrappers and other downstream integrations can provide a session-row
-context menu without patching `SessionSidebar`. Listen for the cancelable
-`pi-web:session-row-contextmenu` browser event and call `preventDefault()`
-synchronously when the integration will handle it:
-
-```js
-window.addEventListener("pi-web:session-row-contextmenu", (event) => {
-  event.preventDefault();
-  const { id, path, cwd, name, clientX, clientY, refresh } = event.detail;
-
-  void openSessionMenu({ id, path, cwd, name, clientX, clientY }).then((changed) => {
-    if (changed) refresh();
-  });
-});
-```
-
-The detail object contains `id`, `path`, `cwd`, optional `name`, pointer
-coordinates, and a `refresh()` callback for actions that change the session
-list. If no listener cancels the extension event, Pi Web preserves the
-browser's native context menu. This hook is browser-side and independent of
-Pi agent extensions.
 
 ## Development
 
@@ -307,15 +278,14 @@ app/
     skills/         # skill listing, search, install, enable/disable
 components/
   AppShell.tsx        # main layout, URL state, top panels, file tabs
-  SessionSidebar.tsx  # project selector, session tree, Explorer
-  DirectoryPicker.tsx # browsable and editable working-directory picker
+  HerdrPanel.tsx      # sidebar: Herdr machines, workspaces, tabs, agents and subagents
+  KanbanView.tsx      # Kan board panel, linked per project
   ChatWindow.tsx      # messages, SSE, image drag/drop, minimap
   ChatInput.tsx       # input bar, model/role/tools/thinking/compact/slash controls
   MessageView.tsx     # message, thinking, tool call/result rendering
   ModelsConfig.tsx    # provider and auth configuration panel
   ModelRolesPanel.tsx # per-role model assignment
   SkillsConfig.tsx    # skill management panel
-  FileExplorer.tsx    # file tree
   FileViewer.tsx      # source, diff, image, audio, PDF, DOCX preview
 lib/
   directory-browser.ts # directory normalization and safe listing helpers

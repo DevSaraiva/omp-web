@@ -6,8 +6,8 @@ The `omp` CLI loads a repository's `.omp/extensions`, `.omp/hooks`, `.omp/tools`
 and `.mcp.json` as a matter of course. That is safe by construction: you ran
 `omp` inside that repository, which is itself the decision to execute it.
 
-omp-web reaches the same code from a browser tab. Clicking a project in the
-sidebar — or having a session for it restored on page load — would otherwise
+omp-web reaches the same code from a browser tab. Opening an agent's session from
+the Herdr panel — or having one restored on page load — would otherwise
 import and run repository-controlled code on the machine hosting the server,
 without anything that reads as consent. So omp-web keeps a trust store that omp
 itself has no need for.

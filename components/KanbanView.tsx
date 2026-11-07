@@ -84,18 +84,20 @@ interface AgentResult {
 
 function StartAgentDialog({
   card,
+  project,
   onClose,
   onCardChanged,
   onOpenAgent,
 }: {
   card: KanCardDetail;
+  project: string | null;
   onClose: () => void;
   onCardChanged: () => void;
   onOpenAgent: (paneId: string) => void;
 }) {
   const { t } = useI18n();
   const [playbook, setPlaybook] = useState<KanAgentPlaybook>("software");
-  const [repo, setRepo] = useState(() => readStored(PROJECT_KEY));
+  const [repo, setRepo] = useState(() => project ?? readStored(PROJECT_KEY));
   const [task, setTask] = useState(() => buildKanTaskText(card));
   const [projects, setProjects] = useState<string[]>([]);
   const [machines, setMachines] = useState<HerdrMachineView[]>([]);
@@ -310,11 +312,13 @@ function StartAgentDialog({
 
 function CardSheet({
   cardId,
+  project,
   onClose,
   onChanged,
   onOpenAgent,
 }: {
   cardId: string;
+  project: string | null;
   onClose: () => void;
   onChanged: () => void;
   onOpenAgent: (paneId: string) => void;
@@ -464,6 +468,7 @@ function CardSheet({
       {agentOpen && card && (
         <StartAgentDialog
           card={card}
+          project={project}
           onClose={() => setAgentOpen(false)}
           onCardChanged={cardChanged}
           onOpenAgent={(paneId) => {
@@ -476,7 +481,13 @@ function CardSheet({
   );
 }
 
-export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
+/**
+ * The Kan board of the current project. A project (a repo's project root) is linked to one board
+ * once, from the pickers shown while it has none; after that the panel opens straight on it.
+ * Without a project the pickers stay, for browsing any board.
+ */
+export function KanbanView(props: { project: string | null; onOpenAgent: (paneId: string) => void }) {
+  const { project } = props;
   const { t } = useI18n();
   const [workspaces, setWorkspaces] = useState<KanWorkspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -489,8 +500,35 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
   const [openCardId, setOpenCardId] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [boardTick, setBoardTick] = useState(0);
+  // The project's linked board: undefined while loading, null when it has none yet.
+  const [linked, setLinked] = useState<{ workspaceId: string; boardId: string } | null | undefined>(undefined);
+  const [choosing, setChoosing] = useState(false);
+  const [linking, setLinking] = useState(false);
+  // Pickers start from the linked board; linking the one already shown must not reload it.
+  const linkedRef = useRef(linked);
+  linkedRef.current = linked;
+  const linkKnown = linked !== undefined;
 
   useEffect(() => {
+    setChoosing(false);
+    setBoard(null);
+    setBoardId("");
+    if (!project) {
+      setLinked(null);
+      return;
+    }
+    let cancelled = false;
+    setLinked(undefined);
+    requestJson<{ board: { workspaceId: string; boardId: string } | null }>(`/api/kan/project-board?project=${encodeURIComponent(project)}`)
+      .then(({ board: found }) => { if (!cancelled) setLinked(found); })
+      .catch(() => { if (!cancelled) setLinked(null); });
+    return () => {
+      cancelled = true;
+    };
+  }, [project]);
+
+  useEffect(() => {
+    if (!linkKnown) return;
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -498,8 +536,8 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
       .then(({ workspaces: found }) => {
         if (cancelled) return;
         setWorkspaces(found);
-        const stored = readStored(WORKSPACE_KEY);
-        setWorkspaceId((found.find((workspace) => workspace.publicId === stored) ?? found[0])?.publicId ?? "");
+        const wanted = linkedRef.current?.workspaceId ?? readStored(WORKSPACE_KEY);
+        setWorkspaceId((found.find((workspace) => workspace.publicId === wanted) ?? found[0])?.publicId ?? "");
         if (found.length === 0) setLoading(false);
       })
       .catch((e: unknown) => {
@@ -510,17 +548,18 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, t]);
+  }, [linkKnown, reloadKey, t]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId || !linkKnown) return;
     let cancelled = false;
     requestJson<{ boards: KanBoardSummary[] }>(`/api/kan/workspaces/${workspaceId}/boards`)
       .then(({ boards: found }) => {
         if (cancelled) return;
         setBoards(found);
-        const stored = readStored(BOARD_KEY);
-        const pick = found.find((entry) => entry.publicId === stored)
+        const link = linkedRef.current;
+        const wanted = link?.workspaceId === workspaceId ? link.boardId : readStored(BOARD_KEY);
+        const pick = found.find((entry) => entry.publicId === wanted)
           ?? found.find((entry) => entry.name.trim().toLowerCase() === PREFERRED_BOARD)
           ?? found[0];
         setBoardId(pick?.publicId ?? "");
@@ -534,7 +573,7 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, reloadKey, t]);
+  }, [workspaceId, linkKnown, reloadKey, t]);
 
   useEffect(() => {
     if (!boardId) return;
@@ -564,40 +603,85 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
   const refreshBoard = useCallback(() => setBoardTick((n) => n + 1), []);
   const closeCard = useCallback(() => setOpenCardId(""), []);
 
+  const linkBoard = async () => {
+    if (!project || !workspaceId || !boardId) return;
+    setLinking(true);
+    try {
+      const { board: saved } = await requestJson<{ board: { workspaceId: string; boardId: string } }>(
+        "/api/kan/project-board",
+        { method: "PUT", body: { project, workspaceId, boardId } },
+      );
+      setLinked(saved);
+      setChoosing(false);
+    } catch (e) {
+      setError(t("kanban.linkFailed", { error: messageOf(e) }));
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const projectName = project?.split("/").filter(Boolean).pop() ?? "";
+  const showPickers = !linked || choosing;
+
   return (
     <div className={styles.root}>
       <div className={styles.toolbar}>
-        <select
-          className={styles.select}
-          aria-label={t("kanban.workspace")}
-          value={workspaceId}
-          onChange={(event) => {
-            writeStored(WORKSPACE_KEY, event.target.value);
-            setBoard(null);
-            setBoardId("");
-            setLoading(true);
-            setWorkspaceId(event.target.value);
-          }}
-        >
-          {workspaces.map((workspace) => (
-            <option key={workspace.publicId} value={workspace.publicId}>{workspace.name}</option>
-          ))}
-        </select>
-        <select
-          className={styles.select}
-          aria-label={t("kanban.board")}
-          value={boardId}
-          onChange={(event) => {
-            writeStored(BOARD_KEY, event.target.value);
-            setBoard(null);
-            setLoading(true);
-            setBoardId(event.target.value);
-          }}
-        >
-          {boards.map((entry) => (
-            <option key={entry.publicId} value={entry.publicId}>{entry.name}</option>
-          ))}
-        </select>
+        {showPickers ? (
+          <>
+            <select
+              className={styles.select}
+              aria-label={t("kanban.workspace")}
+              value={workspaceId}
+              onChange={(event) => {
+                writeStored(WORKSPACE_KEY, event.target.value);
+                setBoard(null);
+                setBoardId("");
+                setLoading(true);
+                setWorkspaceId(event.target.value);
+              }}
+            >
+              {workspaces.map((workspace) => (
+                <option key={workspace.publicId} value={workspace.publicId}>{workspace.name}</option>
+              ))}
+            </select>
+            <select
+              className={styles.select}
+              aria-label={t("kanban.board")}
+              value={boardId}
+              onChange={(event) => {
+                writeStored(BOARD_KEY, event.target.value);
+                setBoard(null);
+                setLoading(true);
+                setBoardId(event.target.value);
+              }}
+            >
+              {boards.map((entry) => (
+                <option key={entry.publicId} value={entry.publicId}>{entry.name}</option>
+              ))}
+            </select>
+            {project && (
+              <button
+                type="button"
+                className={`${styles.button} ${styles.primary}`}
+                disabled={!boardId || linking}
+                onClick={() => { void linkBoard(); }}
+                title={project}
+              >
+                {t("kanban.linkBoard", { project: projectName })}
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <span className={styles.boardName} title={project ?? undefined}>
+              {boards.find((entry) => entry.publicId === boardId)?.name ?? board?.name ?? ""}
+              <span className={styles.boardProject}>{projectName}</span>
+            </span>
+            <button type="button" className={styles.button} onClick={() => setChoosing(true)}>
+              {t("kanban.changeBoard")}
+            </button>
+          </>
+        )}
         <button
           type="button"
           className={`${styles.button} ${styles.iconButton}`}
@@ -609,6 +693,9 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
         </button>
       </div>
 
+      {project && linked === null && !error && (
+        <div className={styles.message}>{t("kanban.linkHint", { project: projectName })}</div>
+      )}
       {error && (
         <div className={`${styles.message} ${styles.error}`}>
           {error}{" "}
@@ -619,7 +706,6 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
       )}
       {!error && loading && !board && <div className={styles.message}>{t("kanban.loading")}</div>}
       {!error && !loading && !board && boards.length === 0 && <div className={styles.message}>{t("kanban.noBoards")}</div>}
-
       {board && (
         <>
           <div className={styles.switcher} role="tablist" aria-label={t("kanban.lists")}>
@@ -671,7 +757,7 @@ export function KanbanView(props: { onOpenAgent: (paneId: string) => void }) {
       )}
 
       {openCardId && (
-        <CardSheet cardId={openCardId} onClose={closeCard} onChanged={refreshBoard} onOpenAgent={props.onOpenAgent} />
+        <CardSheet cardId={openCardId} project={project} onClose={closeCard} onChanged={refreshBoard} onOpenAgent={props.onOpenAgent} />
       )}
     </div>
   );

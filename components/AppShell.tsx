@@ -3,7 +3,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { SessionSidebar } from "./SessionSidebar";
 import { HerdrPanel } from "./HerdrPanel";
 import { SubagentPanel } from "./SubagentPanel";
 import { ChatWindow } from "./ChatWindow";
@@ -22,7 +21,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { canApplySessionIdentity, type SessionIdentity } from "@/lib/agent-client";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
-import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
+import { buildAtMentionText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import {
   claimExtensionAttentionNotification,
   shouldShowBrowserNotification,
@@ -69,14 +68,9 @@ export function AppShell() {
   const { locale, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
   useViewportHeight();
-  // Audio ownership lives here (not in ChatWindow) so the completion tone can
-  // also fire for tasks finishing in a non-active workspace whose ChatWindow
-  // is not mounted. ChatWindow receives the audio callbacks as props.
-  const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio, soundEnabledRef } = useAudio();
+  // Audio state lives here; ChatWindow receives the audio callbacks as props.
+  const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const notifiedAttentionRequestIdsRef = useRef(new Set<string>());
-  const handleBackgroundTaskDone = useCallback(() => {
-    if (soundEnabledRef.current) playDoneSound();
-  }, [playDoneSound, soundEnabledRef]);
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -84,7 +78,6 @@ export function AppShell() {
     () => initialNavigation.requestedCwd ? "validating" : "idle",
   );
   const [initialCwdError, setInitialCwdError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
@@ -275,12 +268,6 @@ export function AppShell() {
   // read tool resolves it the same way (it strips the @ prefix).
   const handleAtMention = useCallback((relativePath: string, isDir: boolean) => {
     chatInputRef.current?.insertText(buildAtMentionText(relativePath, isDir));
-    if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
-
-  const handleAtMentions = useCallback((relativePaths: string[]) => {
-    const mentions = buildFileAtMentionsText(relativePaths);
-    if (mentions) chatInputRef.current?.insertText(mentions);
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
   }, [isMobile]);
 
@@ -522,6 +509,35 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [invalidateWorkspaceRestore, router, isMobile]);
 
+  // Opening ?session=<id> selects that session once the session list is in.
+  useEffect(() => {
+    if (!initialSessionId) return;
+    let cancelled = false;
+    void fetch("/api/sessions", { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[]; sessionIdsByRuntimeId?: Record<string, string> }>) : null))
+      .then((d) => {
+        if (cancelled) return;
+        const target = d ? restoreSessionContinuation(initialSessionId, d.sessions, d.sessionIdsByRuntimeId) : undefined;
+        if (target) handleSelectSession(target, true);
+        else setInitialSessionRestored(true);
+      })
+      .catch(() => { if (!cancelled) setInitialSessionRestored(true); });
+    return () => { cancelled = true; };
+    // Once, on load: later selections come from the Herdr panel and the board.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The working directory follows the open session, or the directory a new session starts in.
+  const followedCwd = selectedSession?.cwd ?? newSessionCwd;
+  const followedProjectRoot = selectedSession?.projectRoot;
+  useEffect(() => {
+    if (followedCwd) handleCwdChange(followedCwd, followedProjectRoot);
+    // Only a change of directory counts, not every new handleCwdChange identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followedCwd, followedProjectRoot]);
+  // The board follows the open session's project: worktrees of one repo share its board.
+  const boardProject = selectedSession ? (selectedSession.projectRoot ?? selectedSession.cwd) : (newSessionCwd ?? activeCwd);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
@@ -552,7 +568,6 @@ export function AppShell() {
     invalidateWorkspaceRestore();
     setNewSessionCwd(null);
     setSelectedSession(session);
-    setRefreshKey((k) => k + 1);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
@@ -592,7 +607,6 @@ export function AppShell() {
   }, [handleSelectSession]);
 
   const handleAgentEnd = useCallback((completedSessionId?: string) => {
-    setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
     const targetSession = selectedSession
       ? { ...selectedSession, id: completedSessionId ?? selectedSession.id }
@@ -625,7 +639,6 @@ export function AppShell() {
     activeSessionIdRef.current = newSessionId;
     activeRuntimeIdRef.current = runtimeId ?? undefined;
     invalidateWorkspaceRestore();
-    setRefreshKey((k) => k + 1);
     if (runtimeId === undefined) setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
     setSelectedSession((prev) => ({
@@ -667,7 +680,6 @@ export function AppShell() {
       }
 
       const title = body.title.trim();
-      setRefreshKey((key) => key + 1);
       const canonicalId = body.sessionId ?? sessionId;
       if (!handleRuntimeIdentity(
         { sessionId: canonicalId, runtimeId: body.runtimeId ?? null },
@@ -689,30 +701,6 @@ export function AppShell() {
     if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
     setAutoNameStatus({ kind: "idle" });
   }, [selectedSession?.id]);
-
-  const handleExplorerRefresh = useCallback(() => {
-    setExplorerRefreshKey((k) => k + 1);
-  }, []);
-
-  const handleInitialRestoreDone = useCallback(() => {
-    setInitialSessionRestored(true);
-  }, []);
-
-  const handleSessionDeleted = useCallback((sessionId: string) => {
-    invalidateWorkspaceRestore();
-    setRefreshKey((k) => k + 1);
-    if (selectedSession?.id === sessionId) {
-      const cwd = selectedSession.cwd;
-      setSelectedSession(null);
-      setNewSessionCwd(cwd ?? null);
-      setSessionKey((k) => k + 1);
-      setBranchTree([]);
-      setBranchActiveLeafId(null);
-      setSystemPrompt(null);
-      setActiveTopPanel(null);
-      router.replace("/", { scroll: false });
-    }
-  }, [invalidateWorkspaceRestore, selectedSession, router]);
 
   const handleOpenFile = useCallback((
     filePath: string,
@@ -847,26 +835,7 @@ export function AppShell() {
   const sidebarContent = (
     <>
       <HerdrPanel selectedSessionId={selectedSession?.id ?? null} onSelectSession={(s) => { setMainView("chat"); handleSelectSession(s); }} />
-      <SessionSidebar
-        selectedSessionId={selectedSession?.id ?? null}
-        selectedRuntimeId={selectedSession?.runtimeId}
-        optimisticSession={selectedSession}
-        onSelectSession={handleSelectSession}
-        onNewSession={handleNewSession}
-        initialSessionId={initialSessionId}
-        skipInitialProjectSelection={initialNavigation.requestedCwd !== null}
-        onInitialRestoreDone={handleInitialRestoreDone}
-        refreshKey={refreshKey}
-        onSessionDeleted={handleSessionDeleted}
-        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
-        onCwdChange={handleCwdChange}
-        onOpenFile={handleOpenFile}
-        explorerRefreshKey={explorerRefreshKey}
-        onExplorerRefresh={handleExplorerRefresh}
-        onAtMention={handleAtMention}
-        onAtMentions={handleAtMentions}
-        onBackgroundTaskDone={handleBackgroundTaskDone}
-      />
+      <div style={{ flex: 1 }} />
       <div style={{ padding: "0 8px", flexShrink: 0 }}>
         <OmpUpdateIndicator />
       </div>
@@ -1732,8 +1701,8 @@ export function AppShell() {
         {/* Chat content */}
         <div className="chat-content-layout">
           <div className="chat-session-column">
-          {mainView === "board" ? (
-            <KanbanView onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
+          {mainView === "board" && isMobile ? (
+            <KanbanView project={boardProject} onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
           ) : mainView === "automations" ? (
             <AutomationsView onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
           ) : showChat ? (
@@ -1801,6 +1770,12 @@ export function AppShell() {
             )
           ) : null}
           </div>
+          {/* The board sits beside the chat, on the open session's project. */}
+          {mainView === "board" && !isMobile && (
+            <div style={{ flex: "0 0 46%", minWidth: 380, minHeight: 0, borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
+              <KanbanView project={boardProject} onOpenAgent={(paneId) => { void handleOpenAgent(paneId); }} />
+            </div>
+          )}
           {showSubagentPanel && (
             <div className="subagent-column">
               <SubagentPanel

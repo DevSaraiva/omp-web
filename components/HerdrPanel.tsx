@@ -111,7 +111,7 @@ export function HerdrPanel(props: {
 
   const open = (pane: HerdrPane) => { if (pane.session) onSelectSession(pane.session); };
 
-  const paneRow = (pane: HerdrPane, label: string, depth: number, machineLocal: boolean, isSubagent = false) => {
+  const paneRow = (pane: HerdrPane, label: string, depth: number, machineLocal: boolean, subagents = 0, isSubagent = false) => {
     const selectable = machineLocal && !!pane.session;
     return (
       <button
@@ -122,21 +122,42 @@ export function HerdrPanel(props: {
         title={selectable
           ? `${pane.title || label} (${STATUS_LABEL[pane.status] || pane.status})`
           : machineLocal ? "No omp session for this pane yet" : "Sessions on other machines open in their own omp-web"}
-        style={{ ...rowStyle(depth, selectable && pane.sessionId === selectedSessionId), opacity: selectable ? 1 : 0.55, cursor: selectable ? "pointer" : "default" }}
+        style={{
+          ...rowStyle(depth, selectable && pane.sessionId === selectedSessionId),
+          ...(isSubagent ? { minHeight: 26, fontSize: 12, color: "var(--text-muted)" } : {}),
+          opacity: selectable ? 1 : 0.55, cursor: selectable ? "pointer" : "default",
+        }}
       >
-        {isSubagent && <span aria-label="subagent" style={{ color: "var(--text-dim)", fontSize: 12, flexShrink: 0 }}>↳</span>}
         <Dot status={pane.status} />
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         {pane.status === "blocked" && <span style={{ fontSize: 11, color: STATUS_COLOR.blocked }}>approve</span>}
+        {subagents > 0 && (
+          <span title={`${subagents} subagent${subagents === 1 ? "" : "s"}`} style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>
+            {subagents} sub
+          </span>
+        )}
       </button>
     );
   };
+
+  // Subagents hang off a guide line that starts under their parent's status dot, one level per
+  // generation, so who started whom reads at a glance.
+  const agentRows = (node: HerdrAgentNode, label: string, depth: number, machineLocal: boolean, isSubagent: boolean): React.ReactNode => (
+    <div key={node.pane.paneId}>
+      {paneRow(node.pane, label, depth, machineLocal, node.children.length, isSubagent)}
+      {node.children.length > 0 && (
+        <div style={{ marginLeft: 13 + depth * 14, borderLeft: "2px solid var(--text-dim)", borderRadius: 1, paddingLeft: 2 }}>
+          {node.children.map((child) => agentRows(child, agentLabel(child.pane) || "subagent", 0, machineLocal, true))}
+        </div>
+      )}
+    </div>
+  );
 
   if (!machines && !error) return null;
   const multipleMachines = (machines?.length ?? 0) > 1;
 
   return (
-    <div style={{ padding: "6px 6px 4px", borderBottom: "1px solid var(--border)", flexShrink: 0, maxHeight: "45%", overflowY: "auto" }}>
+    <div style={{ padding: "6px 6px 4px", flex: "0 1 auto", minHeight: 0, overflowY: "auto" }}>
       <button type="button" onClick={() => toggle("__root")} style={{ ...rowStyle(0, false), color: "var(--text-muted)", fontSize: 12, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
         <span style={{ width: 10 }}>{collapsed.__root ? "▸" : "▾"}</span>Herdr
       </button>
@@ -161,21 +182,16 @@ export function HerdrPanel(props: {
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ws.label}</span>
                 </button>
                 {!collapsed[wsKey] && ws.tabs.map((tab) => {
-                  // Subagents sit under the agent that started them, one level deeper per generation.
-                  const rows = (node: HerdrAgentNode, label: string, rowDepth: number, isSubagent: boolean): React.ReactNode[] => [
-                    paneRow(node.pane, label, rowDepth, machine.local, isSubagent),
-                    ...node.children.flatMap((child) => rows(child, agentLabel(child.pane) || "subagent", rowDepth + 1, true)),
-                  ];
                   const forest = herdrAgentForest(tab);
                   // A tab with one top-level agent is that agent; with several, each is listed under the tab.
-                  if (forest.length === 1) return <div key={tab.id}>{rows(forest[0], tab.label, depth + 1, false)}</div>;
+                  if (forest.length === 1) return agentRows(forest[0], tab.label, depth + 1, machine.local, false);
                   return (
                     <div key={tab.id}>
                       <div style={{ ...rowStyle(depth + 1, false), cursor: "default", color: forest.length ? "var(--text)" : "var(--text-muted)" }}>
                         <Dot status={tab.status} />
                         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tab.label}</span>
                       </div>
-                      {forest.flatMap((node, i) => rows(node, agentLabel(node.pane) || `agent ${i + 1}`, depth + 2, false))}
+                      {forest.map((node, i) => agentRows(node, agentLabel(node.pane) || `agent ${i + 1}`, depth + 2, machine.local, false))}
                     </div>
                   );
                 })}
